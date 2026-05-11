@@ -1,8 +1,8 @@
 # Python
 __pycache__/
-*.py[cod]
-*$py.class
-*.so
+.py[cod]
+$py.class
+.so
 .Python
 build/
 develop-eggs/
@@ -17,9 +17,9 @@ sdist/
 var/
 wheels/
 share/python-wheels/
-*.egg-info/
+.egg-info/
 .installed.cfg
-*.egg
+.egg
 MANIFEST
 
 # Virtual Environment
@@ -36,16 +36,16 @@ pip-delete-this-directory.txt
 
 # Data & models
 data/*.pdf
-*.pth
-*.bin
-*.h5
+.pth
+.bin
+.h5
 
 # Notebooks
 notebooks/*.ipynb_checkpoints/
 
 # Logs & observability
 logs/
-*.log
+.log
 
 # OS
 .DS_Store
