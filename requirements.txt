@@ -1,0 +1,22 @@
+fastapi==0.115.6
+uvicorn[standard]==0.34.0
+pydantic==2.10.3
+python-dotenv==1.0.1
+
+langgraph
+langchain
+langchain-community
+langchain-core
+
+# Vector Store - Using FAISS (works better on Windows)
+faiss-cpu
+sentence-transformers==3.4.1
+
+pypdf==5.1.0
+unstructured[pdf]
+
+langfuse==2.59.0
+
+tiktoken==0.8.0
+httpx==0.28.1
+tqdm==4.67.1
