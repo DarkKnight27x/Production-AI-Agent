@@ -9,66 +9,79 @@ settings = get_settings()
 
 llm = ChatGroq(
     model=settings.llm_model,
-    temperature=0.7,
+    temperature=0.6,
     groq_api_key=settings.groq_api_key
 )
 
 web_search = get_web_search_tool()
 
-def agent_node(state):
-    messages = state["messages"]
-    question = messages[-1].content
+def retrieve(state):
+    question = state["messages"][-1].content
+    print(f"🔍 Retrieving context for: {question}")
     
-    print(f"🤖 Processing: {question}")
-    
-    # Try to get context from documents
-    retriever = get_retriever(k=5)
+    retriever = get_retriever(k=6)
     context = ""
     if retriever:
         docs = retriever.invoke(question)
         if docs:
             context = "\n\n".join([doc.page_content for doc in docs])
+            print(f"✅ Retrieved {len(docs)} chunks")
+    
+    return {"context": context, "messages": state["messages"]}
 
-    # Create prompt with memory + context
+def generate(state):
+    question = state["messages"][-1].content
+    context = state.get("context", "")
+    
+    # Step 1: Generate initial answer
     if context:
-        prompt = f"""You are a helpful AI assistant. Use the following context if relevant.
+        initial_prompt = f"""Use the context if relevant. Answer naturally.
 
-Context from documents:
+Context:
 {context}
 
-Previous conversation:
-{'' if len(messages) <= 1 else str(messages[:-1])}
-
-Current Question: {question}
-
-Answer naturally and conversationally:"""
+Question: {question}"""
     else:
-        prompt = f"""You are a helpful AI assistant. Remember the conversation history.
+        initial_prompt = question
 
-Previous conversation:
-{'' if len(messages) <= 1 else str(messages[:-1])}
+    initial_response = llm.invoke(initial_prompt)
+    initial_answer = initial_response.content
 
-Current Question: {question}
+    # Step 2: Self-Critique
+    critique_prompt = f"""Critique this answer strictly:
+- Is it factually correct?
+- Does it hallucinate?
+- Is it complete and relevant?
+- Any improvements needed?
 
-Answer naturally:"""
+Question: {question}
+Answer: {initial_answer}
 
-    # Bind tool
-    llm_with_tools = llm.bind_tools([web_search])
-    response = llm_with_tools.invoke(prompt)
+Critique:"""
 
-    # Handle tool call (web search)
-    if response.tool_calls:
-        tool_result = web_search.invoke(response.tool_calls[0]['args'])
-        final_prompt = f"Question: {question}\n\nWeb Search Result: {tool_result}\n\nGive a natural, updated answer."
-        final_response = llm.invoke(final_prompt)
-        return {"messages": messages + [AIMessage(content=final_response.content)]}
+    critique = llm.invoke(critique_prompt).content
 
-    return {"messages": messages + [AIMessage(content=response.content)]}
+    # Step 3: Generate final improved answer
+    final_prompt = f"""Improve the answer based on the critique.
 
-# Build Graph with Memory
+Original Answer: {initial_answer}
+
+Critique: {critique}
+
+Final Answer:"""
+
+    final_response = llm.invoke(final_prompt).content
+
+    print("✅ Self-critique & improvement done")
+    return {"messages": state["messages"] + [AIMessage(content=final_response)]}
+
+# Build Graph
 workflow = StateGraph(dict)
-workflow.add_node("agent", agent_node)
-workflow.add_edge(START, "agent")
-workflow.add_edge("agent", END)
+workflow.add_node("retrieve", retrieve)
+workflow.add_node("generate", generate)
+
+workflow.add_edge(START, "retrieve")
+workflow.add_edge("retrieve", "generate")
+workflow.add_edge("generate", END)
 
 agent = workflow.compile()
