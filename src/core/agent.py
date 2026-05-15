@@ -17,7 +17,7 @@ web_search = get_web_search_tool()
 
 def retrieve(state):
     question = state["messages"][-1].content
-    print(f"🔍 Retrieving context for: {question}")
+    print(f"🔍 Retrieving for: {question}")
     
     retriever = get_retriever(k=6)
     context = ""
@@ -33,14 +33,16 @@ def generate(state):
     question = state["messages"][-1].content
     context = state.get("context", "")
     
-    # Step 1: Generate initial answer
+    # Step 1: Generate Initial Answer
     if context:
-        initial_prompt = f"""Use the context if relevant. Answer naturally.
+        initial_prompt = f"""Use the context if relevant. Be accurate.
 
 Context:
 {context}
 
-Question: {question}"""
+Question: {question}
+
+Answer:"""
     else:
         initial_prompt = question
 
@@ -48,11 +50,7 @@ Question: {question}"""
     initial_answer = initial_response.content
 
     # Step 2: Self-Critique
-    critique_prompt = f"""Critique this answer strictly:
-- Is it factually correct?
-- Does it hallucinate?
-- Is it complete and relevant?
-- Any improvements needed?
+    critique_prompt = f"""Critique the following answer strictly for accuracy, hallucinations, completeness, and clarity.
 
 Question: {question}
 Answer: {initial_answer}
@@ -61,21 +59,21 @@ Critique:"""
 
     critique = llm.invoke(critique_prompt).content
 
-    # Step 3: Generate final improved answer
-    final_prompt = f"""Improve the answer based on the critique.
+    # Step 3: Generate Improved Final Answer
+    final_prompt = f"""Improve the answer based on this critique. Make it more accurate and natural.
 
 Original Answer: {initial_answer}
 
 Critique: {critique}
 
-Final Answer:"""
+Final Improved Answer:"""
 
     final_response = llm.invoke(final_prompt).content
 
-    print("✅ Self-critique & improvement done")
+    print("✅ Self-critique completed")
     return {"messages": state["messages"] + [AIMessage(content=final_response)]}
 
-# Build Graph
+# Build the Graph
 workflow = StateGraph(dict)
 workflow.add_node("retrieve", retrieve)
 workflow.add_node("generate", generate)
