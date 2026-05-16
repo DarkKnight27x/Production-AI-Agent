@@ -9,77 +9,73 @@ settings = get_settings()
 
 llm = ChatGroq(
     model=settings.llm_model,
-    temperature=0.6,
+    temperature=0.7,
     groq_api_key=settings.groq_api_key
 )
 
 web_search = get_web_search_tool()
 
-def retrieve(state):
+def researcher_node(state):
     question = state["messages"][-1].content
-    print(f"🔍 Retrieving for: {question}")
+    print(f"🔍 Researcher working on: {question}")
     
+    # Check documents
     retriever = get_retriever(k=6)
     context = ""
     if retriever:
         docs = retriever.invoke(question)
         if docs:
             context = "\n\n".join([doc.page_content for doc in docs])
-            print(f"✅ Retrieved {len(docs)} chunks")
+    
+    # If no relevant documents, use web search
+    if not context or len(context) < 100:
+        print("🌐 No relevant documents → Using Web Search")
+        search_result = web_search.invoke({"query": question})
+        context = f"Web Search Result:\n{search_result}"
     
     return {"context": context, "messages": state["messages"]}
 
-def generate(state):
+def critic_node(state):
     question = state["messages"][-1].content
     context = state.get("context", "")
     
-    # Step 1: Generate Initial Answer
-    if context:
-        initial_prompt = f"""Use the context if relevant. Be accurate.
-
-Context:
-{context}
+    critique_prompt = f"""Review this information for the question and give honest feedback:
 
 Question: {question}
-
-Answer:"""
-    else:
-        initial_prompt = question
-
-    initial_response = llm.invoke(initial_prompt)
-    initial_answer = initial_response.content
-
-    # Step 2: Self-Critique
-    critique_prompt = f"""Critique the following answer strictly for accuracy, hallucinations, completeness, and clarity.
-
-Question: {question}
-Answer: {initial_answer}
+Information: {context}
 
 Critique:"""
 
     critique = llm.invoke(critique_prompt).content
+    return {"context": context, "critique": critique, "messages": state["messages"]}
 
-    # Step 3: Generate Improved Final Answer
-    final_prompt = f"""Improve the answer based on this critique. Make it more accurate and natural.
+def summarizer_node(state):
+    question = state["messages"][-1].content
+    context = state.get("context", "")
+    critique = state.get("critique", "")
+    
+    final_prompt = f"""Answer the question clearly and naturally using the available information and critique.
 
-Original Answer: {initial_answer}
-
+Question: {question}
+Available Information: {context}
 Critique: {critique}
 
-Final Improved Answer:"""
+Final Answer:"""
 
-    final_response = llm.invoke(final_prompt).content
+    final_answer = llm.invoke(final_prompt).content
+    print("✅ Multi-Agent completed")
+    
+    return {"messages": state["messages"] + [AIMessage(content=final_answer)]}
 
-    print("✅ Self-critique completed")
-    return {"messages": state["messages"] + [AIMessage(content=final_response)]}
-
-# Build the Graph
+# Multi-Agent Workflow
 workflow = StateGraph(dict)
-workflow.add_node("retrieve", retrieve)
-workflow.add_node("generate", generate)
+workflow.add_node("researcher", researcher_node)
+workflow.add_node("critic", critic_node)
+workflow.add_node("summarizer", summarizer_node)
 
-workflow.add_edge(START, "retrieve")
-workflow.add_edge("retrieve", "generate")
-workflow.add_edge("generate", END)
+workflow.add_edge(START, "researcher")
+workflow.add_edge("researcher", "critic")
+workflow.add_edge("critic", "summarizer")
+workflow.add_edge("summarizer", END)
 
 agent = workflow.compile()
