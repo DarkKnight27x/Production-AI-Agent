@@ -1,26 +1,69 @@
 import streamlit as st
 import requests
-import time
+from pathlib import Path
+import shutil
 
 st.set_page_config(page_title="Production AI Agent", page_icon="🧠", layout="wide")
 
 st.title("🧠 Production AI Agent")
-st.caption("**Agentic RAG + General Knowledge** • Built by Sk")
+st.caption("**Agentic RAG + File Upload + Tools** • Built by Sk")
 
-# Backend URL
-BACKEND_URL = "http://localhost:8000"
-
-# Initialize chat
+# Persistent chat memory
 if "messages" not in st.session_state:
     st.session_state.messages = []
 
-# Display chat messages
-for message in st.session_state.messages:
-    with st.chat_message(message["role"]):
-        st.markdown(message["content"])
+# ==================== SIDEBAR ====================
+with st.sidebar:
+    st.header("📁 Document Management")
+    
+    # File Upload
+    uploaded_files = st.file_uploader(
+        "Upload PDF Documents", 
+        type="pdf", 
+        accept_multiple_files=True
+    )
+    
+    if uploaded_files:
+        for file in uploaded_files:
+            save_path = Path("data") / file.name
+            save_path.parent.mkdir(exist_ok=True)
+            with open(save_path, "wb") as f:
+                f.write(file.getbuffer())
+        st.success(f"✅ Uploaded {len(uploaded_files)} PDF(s)")
 
-# Chat input
-if prompt := st.chat_input("Ask me anything..."):
+    col1, col2 = st.columns(2)
+    with col1:
+        if st.button("🔄 Re-ingest Documents"):
+            try:
+                r = requests.post("http://localhost:8000/ingest", timeout=40)
+                if r.status_code == 200:
+                    st.success("✅ Documents processed successfully!")
+                else:
+                    st.error("Ingestion failed")
+            except:
+                st.error("❌ Backend not running")
+
+    with col2:
+        if st.button("🗑️ Clear & Rebuild Index"):
+            try:
+                if Path("faiss_index").exists():
+                    shutil.rmtree("faiss_index")
+                st.success("✅ Old index cleared!")
+                r = requests.post("http://localhost:8000/ingest", timeout=40)
+                if r.status_code == 200:
+                    st.success("✅ Fresh index built!")
+            except Exception as e:
+                st.error(f"Error: {e}")
+
+    st.markdown("---")
+    st.caption("FastAPI + LangGraph + FAISS")
+
+# ==================== CHAT INTERFACE ====================
+for msg in st.session_state.messages:
+    with st.chat_message(msg["role"]):
+        st.markdown(msg["content"])
+
+if prompt := st.chat_input("Ask anything about your documents..."):
     st.session_state.messages.append({"role": "user", "content": prompt})
     with st.chat_message("user"):
         st.markdown(prompt)
@@ -29,36 +72,15 @@ if prompt := st.chat_input("Ask me anything..."):
         with st.spinner("Thinking..."):
             try:
                 response = requests.post(
-                    f"{BACKEND_URL}/chat",
+                    "http://localhost:8000/chat",
                     json={"question": prompt},
-                    timeout=25
+                    timeout=60
                 )
-                
                 if response.status_code == 200:
-                    answer = response.json().get("answer", "No answer received.")
+                    answer = response.json().get("answer", "Sorry, I couldn't process that.")
                     st.markdown(answer)
                     st.session_state.messages.append({"role": "assistant", "content": answer})
                 else:
-                    st.error(f"Backend returned error: {response.status_code}")
-                    
-            except requests.exceptions.ConnectionError:
-                st.error("❌ Backend is not running! Start it with: `python -m src.main`")
-                st.info("Tip: Open another terminal and run `python -m src.main`")
+                    st.error(f"Backend error: {response.status_code}")
             except Exception as e:
-                st.error(f"Error: {str(e)}")
-
-# Sidebar
-with st.sidebar:
-    st.header("📁 Documents")
-    if st.button("🔄 Re-ingest Documents"):
-        try:
-            r = requests.post(f"{BACKEND_URL}/ingest")
-            if r.status_code == 200:
-                st.success("✅ Documents ingested successfully!")
-            else:
-                st.error("Failed to ingest")
-        except:
-            st.error("Backend not running")
-
-    st.markdown("---")
-    st.caption("FastAPI + LangGraph + FAISS")
+                st.error(f"Cannot connect to backend. Make sure backend is running.\nError: {e}")

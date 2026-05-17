@@ -1,4 +1,5 @@
 from langchain_community.tools.tavily_search import TavilySearchResults
+from langchain_experimental.utilities import PythonREPL
 from src.config import get_settings
 
 settings = get_settings()
@@ -10,3 +11,8 @@ def get_web_search_tool():
         search_depth="advanced",
         include_answer=True
     )
+
+def get_code_interpreter_tool():
+    """Code Interpreter Tool"""
+    repl = PythonREPL()
+    return repl

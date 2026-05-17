@@ -3,7 +3,7 @@ from langchain_core.messages import HumanMessage, AIMessage
 from langchain_groq import ChatGroq
 from src.config import get_settings
 from src.rag.retriever import get_retriever
-from src.core.tools import get_web_search_tool
+from src.core.tools import get_web_search_tool, get_code_interpreter_tool
 
 settings = get_settings()
 
@@ -14,68 +14,57 @@ llm = ChatGroq(
 )
 
 web_search = get_web_search_tool()
+code_interpreter = get_code_interpreter_tool()
 
-def researcher_node(state):
-    question = state["messages"][-1].content
-    print(f"🔍 Researcher working on: {question}")
+def agent_node(state):
+    messages = state["messages"]
+    question = messages[-1].content.lower()
     
-    # Check documents
-    retriever = get_retriever(k=6)
+    print(f"🤖 Processing: {question}")
+    
+    # Check if user wants code execution / plotting / math
+    code_keywords = ["plot", "calculate", "solve", "graph", "math", "code", "function", "equation"]
+    needs_code = any(word in question for word in code_keywords)
+    
     context = ""
+    retriever = get_retriever(k=5)
     if retriever:
         docs = retriever.invoke(question)
         if docs:
             context = "\n\n".join([doc.page_content for doc in docs])
-    
-    # If no relevant documents, use web search
-    if not context or len(context) < 100:
-        print("🌐 No relevant documents → Using Web Search")
-        search_result = web_search.invoke({"query": question})
-        context = f"Web Search Result:\n{search_result}"
-    
-    return {"context": context, "messages": state["messages"]}
 
-def critic_node(state):
-    question = state["messages"][-1].content
-    context = state.get("context", "")
-    
-    critique_prompt = f"""Review this information for the question and give honest feedback:
+    if needs_code:
+        # Generate proper Python code first
+        code_prompt = f"""Write clean, correct Python code to answer this request. Use matplotlib for plots.
 
-Question: {question}
-Information: {context}
+Request: {messages[-1].content}
 
-Critique:"""
+Return only the code (no explanation). Include plt.show() for plots."""
 
-    critique = llm.invoke(critique_prompt).content
-    return {"context": context, "critique": critique, "messages": state["messages"]}
+        code = llm.invoke(code_prompt).content.strip()
+        print(f"Generated Code:\n{code}")
+        
+        try:
+            result = code_interpreter.run(code)
+            final_answer = f"**Code executed successfully.**\n\n{result}"
+        except Exception as e:
+            final_answer = f"**Code execution failed.**\n\nError: {str(e)}\n\nI tried to run this code:\n```python\n{code}\n```"
+    else:
+        # Normal RAG + Web Search flow
+        if context:
+            prompt = f"Context:\n{context}\n\nQuestion: {messages[-1].content}\nAnswer naturally."
+        else:
+            prompt = messages[-1].content
+            
+        response = llm.invoke(prompt)
+        final_answer = response.content
 
-def summarizer_node(state):
-    question = state["messages"][-1].content
-    context = state.get("context", "")
-    critique = state.get("critique", "")
-    
-    final_prompt = f"""Answer the question clearly and naturally using the available information and critique.
+    return {"messages": messages + [AIMessage(content=final_answer)]}
 
-Question: {question}
-Available Information: {context}
-Critique: {critique}
-
-Final Answer:"""
-
-    final_answer = llm.invoke(final_prompt).content
-    print("✅ Multi-Agent completed")
-    
-    return {"messages": state["messages"] + [AIMessage(content=final_answer)]}
-
-# Multi-Agent Workflow
+# Graph
 workflow = StateGraph(dict)
-workflow.add_node("researcher", researcher_node)
-workflow.add_node("critic", critic_node)
-workflow.add_node("summarizer", summarizer_node)
-
-workflow.add_edge(START, "researcher")
-workflow.add_edge("researcher", "critic")
-workflow.add_edge("critic", "summarizer")
-workflow.add_edge("summarizer", END)
+workflow.add_node("agent", agent_node)
+workflow.add_edge(START, "agent")
+workflow.add_edge("agent", END)
 
 agent = workflow.compile()
