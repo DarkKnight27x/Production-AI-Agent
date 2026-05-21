@@ -3,7 +3,6 @@ from langchain_core.messages import HumanMessage, AIMessage
 from langchain_groq import ChatGroq
 from src.config import get_settings
 from src.rag.retriever import get_retriever
-from src.core.tools import get_web_search_tool, get_code_interpreter_tool
 
 settings = get_settings()
 
@@ -13,58 +12,127 @@ llm = ChatGroq(
     groq_api_key=settings.groq_api_key
 )
 
-web_search = get_web_search_tool()
-code_interpreter = get_code_interpreter_tool()
+def build_history(messages):
+    parts = []
+    for m in messages[:-1]:
+        if isinstance(m, HumanMessage):
+            parts.append(f"User: {m.content}")
+        elif isinstance(m, AIMessage):
+            parts.append(f"Assistant: {m.content}")
+    return "\n".join(parts)
 
-def agent_node(state):
+
+# ── 1. Classifier (NO LLM — pure logic) ──────────────────────────────────────
+FOLLOWUP_PRONOUNS = ["his", "her", "their", "he", "she", "they", "them", "it", "its", "that", "this", "those", "these"]
+DOC_KEYWORDS = ["document", "pdf", "file", "uploaded", "according to", "in the document", "the text", "syllabus", "report", "paper"]
+
+def classifier_node(state):
     messages = state["messages"]
-    question = messages[-1].content.lower()
-    
-    print(f"🤖 Processing: {question}")
-    
-    # Check if user wants code execution / plotting / math
-    code_keywords = ["plot", "calculate", "solve", "graph", "math", "code", "function", "equation"]
-    needs_code = any(word in question for word in code_keywords)
-    
-    context = ""
-    retriever = get_retriever(k=5)
-    if retriever:
-        docs = retriever.invoke(question)
-        if docs:
-            context = "\n\n".join([doc.page_content for doc in docs])
+    question = messages[-1].content.lower().strip()
+    has_history = len(messages) > 1
 
-    if needs_code:
-        # Generate proper Python code first
-        code_prompt = f"""Write clean, correct Python code to answer this request. Use matplotlib for plots.
+    # If there's conversation history AND question starts with a pronoun/follow-up word → CHAT
+    words = question.split()
+    starts_with_pronoun = words[0] in FOLLOWUP_PRONOUNS if words else False
+    contains_pronoun = any(w in FOLLOWUP_PRONOUNS for w in words)
+    contains_doc_keyword = any(kw in question for kw in DOC_KEYWORDS)
 
-Request: {messages[-1].content}
-
-Return only the code (no explanation). Include plt.show() for plots."""
-
-        code = llm.invoke(code_prompt).content.strip()
-        print(f"Generated Code:\n{code}")
-        
-        try:
-            result = code_interpreter.run(code)
-            final_answer = f"**Code executed successfully.**\n\n{result}"
-        except Exception as e:
-            final_answer = f"**Code execution failed.**\n\nError: {str(e)}\n\nI tried to run this code:\n```python\n{code}\n```"
+    if contains_doc_keyword:
+        route = "rag"
+    elif has_history and (starts_with_pronoun or contains_pronoun):
+        route = "chat"
+    elif not has_history:
+        route = "chat"  # first message with no docs mentioned → chat
     else:
-        # Normal RAG + Web Search flow
-        if context:
-            prompt = f"Context:\n{context}\n\nQuestion: {messages[-1].content}\nAnswer naturally."
-        else:
-            prompt = messages[-1].content
-            
-        response = llm.invoke(prompt)
-        final_answer = response.content
+        route = "chat"  # default to chat, only RAG when explicitly about docs
 
-    return {"messages": messages + [AIMessage(content=final_answer)]}
+    return {**state, "route": route}
 
-# Graph
+
+# ── 2. Router ─────────────────────────────────────────────────────────────────
+def route_decision(state):
+    return state.get("route", "chat")
+
+
+# ── 3. Chat node ──────────────────────────────────────────────────────────────
+def chat_node(state):
+    messages = state["messages"]
+    question = messages[-1].content
+    history = build_history(messages)
+
+    if history:
+        prompt = f"""You are a helpful assistant with full memory of this conversation.
+
+Previous conversation:
+{history}
+
+New question: {question}
+
+RULES:
+- The conversation history above is your memory. Use it to resolve any pronouns like "he", "she", "his", "they".
+- If someone was mentioned earlier, you know who they are. Answer directly.
+- Never mention documents, PDFs, context, or system internals.
+- Answer naturally as if you remember everything said above.
+
+Answer:"""
+    else:
+        prompt = f"""You are a helpful assistant.
+
+Question: {question}
+
+Answer directly and naturally.
+
+Answer:"""
+
+    response = llm.invoke(prompt)
+    return {"messages": messages + [AIMessage(content=response.content)]}
+
+
+# ── 4. RAG node ───────────────────────────────────────────────────────────────
+def rag_node(state):
+    messages = state["messages"]
+    question = messages[-1].content
+    history = build_history(messages)
+
+    retriever = get_retriever()
+    if retriever is None:
+        return {"messages": messages + [AIMessage(content="No documents ingested yet. Please upload and ingest documents first.")]}
+
+    retrieved_docs = retriever.invoke(question)
+    context = "\n\n".join([doc.page_content for doc in retrieved_docs])
+
+    prompt = f"""You are a helpful assistant. Use the document context below to answer.
+
+Previous conversation:
+{history if history else "None"}
+
+Context from documents:
+{context}
+
+Question: {question}
+
+Answer based on the context. If the answer isn't in the context, say so.
+
+Answer:"""
+
+    response = llm.invoke(prompt)
+    return {"messages": messages + [AIMessage(content=response.content)]}
+
+
+# ── 5. Graph ──────────────────────────────────────────────────────────────────
 workflow = StateGraph(dict)
-workflow.add_node("agent", agent_node)
-workflow.add_edge(START, "agent")
-workflow.add_edge("agent", END)
+
+workflow.add_node("classifier", classifier_node)
+workflow.add_node("chat", chat_node)
+workflow.add_node("rag", rag_node)
+
+workflow.add_edge(START, "classifier")
+workflow.add_conditional_edges(
+    "classifier",
+    route_decision,
+    {"chat": "chat", "rag": "rag"}
+)
+workflow.add_edge("chat", END)
+workflow.add_edge("rag", END)
 
 agent = workflow.compile()

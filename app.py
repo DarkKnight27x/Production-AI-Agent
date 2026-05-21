@@ -8,21 +8,20 @@ st.set_page_config(page_title="Production AI Agent", page_icon="🧠", layout="w
 st.title("🧠 Production AI Agent")
 st.caption("**Agentic RAG + File Upload + Tools** • Built by Sk")
 
-# Persistent chat memory
+# ── Persistent chat memory ────────────────────────────────────────────────────
 if "messages" not in st.session_state:
-    st.session_state.messages = []
+    st.session_state.messages = []   # each item: {"role": "user"/"assistant", "content": "..."}
 
-# ==================== SIDEBAR ====================
+# ── Sidebar ───────────────────────────────────────────────────────────────────
 with st.sidebar:
     st.header("📁 Document Management")
-    
-    # File Upload
+
     uploaded_files = st.file_uploader(
-        "Upload PDF Documents", 
-        type="pdf", 
+        "Upload PDF Documents",
+        type="pdf",
         accept_multiple_files=True
     )
-    
+
     if uploaded_files:
         for file in uploaded_files:
             save_path = Path("data") / file.name
@@ -37,7 +36,7 @@ with st.sidebar:
             try:
                 r = requests.post("http://localhost:8000/ingest", timeout=40)
                 if r.status_code == 200:
-                    st.success("✅ Documents processed successfully!")
+                    st.success("✅ Documents processed!")
                 else:
                     st.error("Ingestion failed")
             except:
@@ -56,14 +55,21 @@ with st.sidebar:
                 st.error(f"Error: {e}")
 
     st.markdown("---")
+
+    if st.button("🧹 Clear Chat History"):
+        st.session_state.messages = []
+        st.rerun()
+
     st.caption("FastAPI + LangGraph + FAISS")
 
-# ==================== CHAT INTERFACE ====================
+# ── Chat display ──────────────────────────────────────────────────────────────
 for msg in st.session_state.messages:
     with st.chat_message(msg["role"]):
         st.markdown(msg["content"])
 
-if prompt := st.chat_input("Ask anything about your documents..."):
+# ── Chat input ────────────────────────────────────────────────────────────────
+if prompt := st.chat_input("Ask anything..."):
+    # Show user message immediately
     st.session_state.messages.append({"role": "user", "content": prompt})
     with st.chat_message("user"):
         st.markdown(prompt)
@@ -73,7 +79,10 @@ if prompt := st.chat_input("Ask anything about your documents..."):
             try:
                 response = requests.post(
                     "http://localhost:8000/chat",
-                    json={"question": prompt},
+                    json={
+                        "question": prompt,
+                        "history": st.session_state.messages[:-1]  # ← send all prior messages as history
+                    },
                     timeout=60
                 )
                 if response.status_code == 200:
@@ -83,4 +92,4 @@ if prompt := st.chat_input("Ask anything about your documents..."):
                 else:
                     st.error(f"Backend error: {response.status_code}")
             except Exception as e:
-                st.error(f"Cannot connect to backend. Make sure backend is running.\nError: {e}")
+                st.error(f"Cannot connect to backend.\nError: {e}")

@@ -1,7 +1,8 @@
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
-from langchain_core.messages import HumanMessage
+from typing import List
+from langchain_core.messages import HumanMessage, AIMessage
 
 from src.config import get_settings
 from src.core.agent import agent
@@ -10,8 +11,15 @@ from src.rag.vectorstore import create_vectorstore, save_vectorstore
 
 settings = get_settings()
 
+
+class MessageItem(BaseModel):
+    role: str      # "user" or "assistant"
+    content: str
+
 class ChatRequest(BaseModel):
     question: str
+    history: List[MessageItem] = []   # ← full history sent from frontend
+
 
 app = FastAPI(title="Production AI Agent")
 
@@ -22,9 +30,11 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
+
 @app.get("/")
 async def root():
     return {"message": "✅ Backend is running!"}
+
 
 @app.post("/ingest")
 async def ingest_documents():
@@ -33,17 +43,31 @@ async def ingest_documents():
     save_vectorstore(vectorstore)
     return {"status": "success", "chunks": len(docs)}
 
+
 @app.post("/chat")
 async def chat(request: ChatRequest):
     try:
-        inputs = {"messages": [HumanMessage(content=request.question)]}
-        result = agent.invoke(inputs)
+        # Rebuild full message list from history
+        messages = []
+        for msg in request.history:
+            if msg.role == "user":
+                messages.append(HumanMessage(content=msg.content))
+            elif msg.role == "assistant":
+                messages.append(AIMessage(content=msg.content))
+
+        # Append the new user message
+        messages.append(HumanMessage(content=request.question))
+
+        result = agent.invoke({"messages": messages})
+        answer = result["messages"][-1].content
+
         return {
             "question": request.question,
-            "answer": result["messages"][-1].content
+            "answer": answer
         }
     except Exception as e:
         return {"question": request.question, "answer": f"Error: {str(e)}"}
+
 
 if __name__ == "__main__":
     import uvicorn
