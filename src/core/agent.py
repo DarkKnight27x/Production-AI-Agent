@@ -2,7 +2,6 @@ from langgraph.graph import StateGraph, START, END
 from langchain_core.messages import HumanMessage, AIMessage
 from langchain_groq import ChatGroq
 from src.config import get_settings
-from src.core.tools import get_web_search_tool, get_code_interpreter_tool
 
 settings = get_settings()
 
@@ -11,9 +10,6 @@ llm = ChatGroq(
     temperature=0.7,
     groq_api_key=settings.groq_api_key
 )
-
-web_search = get_web_search_tool()
-code_interpreter = get_code_interpreter_tool()
 
 def agent_node(state):
     messages = state["messages"]
@@ -24,50 +20,22 @@ def agent_node(state):
         for m in messages[:-1]
     ])
 
-    # Tool Routing Prompt
-    routing_prompt = f"""Decide what to do:
-
-Question: {question}
-
-Options:
-1. Answer directly (general knowledge)
-2. Use Web Search (latest info, news, facts)
-3. Use Code Interpreter (math, calculation, plot)
+    prompt = f"""You are SJ, a smart and helpful AI assistant.
 
 Previous conversation:
-{history if history else "First message."}
+{history if history else "This is the first message."}
 
-Reply with only the number (1, 2 or 3)."""
+New Question: {question}
 
-    decision = llm.invoke(routing_prompt).content.strip()
+Answer naturally and directly like ChatGPT.
+Remember previous messages for follow-up questions.
+Never mention documents, PDFs, context or uploaded files.
+Just give a confident, normal answer."""
 
-    if "2" in decision:
-        tool_result = web_search.invoke({"query": question})
-        context = f"Web Search Result: {tool_result}"
-    elif "3" in decision:
-        try:
-            code_result = code_interpreter.run(question)
-            context = f"Code Result: {code_result}"
-        except:
-            context = "Code execution failed."
-    else:
-        context = ""
-
-    # Final Answer
-    final_prompt = f"""Previous conversation:
-{history if history else ""}
-
-Additional Info: {context}
-
-Question: {question}
-
-Answer naturally and helpfully."""
-
-    response = llm.invoke(final_prompt)
+    response = llm.invoke(prompt)
     
     return {"messages": messages + [AIMessage(content=response.content)]}
 
-# Graph
 workflow = StateGraph(dict)
 workflow.add_node("agent", agent_node)
 workflow.add_edge(START, "agent")
