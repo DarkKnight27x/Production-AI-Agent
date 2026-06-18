@@ -17,3 +17,16 @@ A production-grade intelligent assistant built using LangGraph, FastAPI, and mod
 - Chroma / FAISS
 - Groq / Ollama / Llama-3
 - Langfuse, Docker
+
+## Screenshots
+
+### Login Page
+![Login Page](./public/images/Login.png)
+
+### Main Chat Interface
+![Chatbot](./public/images/Chatbot1.png)
+
+![Chatbot 2](./public/images/Chatbot2.png)
+
+### Logo
+![Logo](./public/images/logo.png)
